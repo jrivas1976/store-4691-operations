@@ -1,3 +1,4 @@
+
 import io
 import re
 from datetime import datetime
@@ -312,8 +313,11 @@ def generate_pdf(rows_by_key,run):
         ("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),3)]))
     story.append(sheet);doc.build(story);out.seek(0);return out.getvalue()
 
-if "operator_name" not in st.session_state:st.session_state.operator_name=""
-if "selected_section" not in st.session_state:st.session_state.selected_section=None
+if "operator_name" not in st.session_state:
+    st.session_state.operator_name = ""
+if "selected_section" not in st.session_state:
+    st.session_state.selected_section = None
+require_login()
 
 try:
     supabase=get_supabase();initialize_today(supabase)
@@ -322,16 +326,18 @@ except Exception as exc:
 
 with st.sidebar:
     st.header("Shared App")
+    st.success(f"Signed in as: {st.session_state.operator_name}")
     st.caption("Changes are saved immediately in Supabase. Tap Refresh to load changes made on another device.")
-    if st.button("Refresh shared checklist",use_container_width=True):st.rerun()
+    if st.button("Refresh shared checklist", use_container_width=True):
+        st.rerun()
+    logout_button()
 
 rows=load_rows(supabase);rows_by_key={r["task_key"]:r for r in rows};run=load_run(supabase)
 today=now_local()
 st.markdown(f"""<div class="hero"><h1>O'Reilly Operations Assistant</h1>
 <p>Store {STORE_NUMBER} · {today.strftime("%A, %B %d, %Y")}</p><p>Shared Management Team Checklist</p></div>""",unsafe_allow_html=True)
+st.info(f"Signed in as **{st.session_state.operator_name}**")
 
-operator=st.text_input("Your name",value=st.session_state.operator_name,placeholder="Name of person using this device")
-st.session_state.operator_name=operator
 manager=st.text_input("Manager on Duty",value=run.get("manager_on_duty") or "",placeholder="Manager on Duty")
 if manager!=(run.get("manager_on_duty") or ""):
     if st.button("Save Manager on Duty",use_container_width=True):
@@ -392,4 +398,44 @@ with st.expander("Manager controls"):
     if st.button("Reset Today's Shared Checklist",disabled=not confirm,use_container_width=True):
         reset_today(supabase);st.success("Today's shared checklist was reset.");st.rerun()
 
-st.caption("Multiuser Version 3.1 · Supabase shared database · Changes are saved for all users immediately and appear on other devices after refresh.")
+st.caption("Multiuser Version 4.0 · Counter Login · Supabase shared database · Changes are saved for all users immediately and appear on other devices after refresh.")
+
+def get_users():
+    try:
+        users = dict(st.secrets["users"])
+    except Exception as exc:
+        raise RuntimeError("Missing [users] section in Streamlit Secrets.") from exc
+    return {str(counter).strip(): str(name).strip() for counter, name in users.items()}
+
+def login_screen():
+    st.markdown("""<div class="hero"><h1>O'Reilly Operations Assistant</h1><p>Store 4691 · Management Team Access</p></div>""", unsafe_allow_html=True)
+    st.subheader("Enter your counter number")
+    counter = st.text_input("Counter number", type="password", placeholder="Enter counter number", label_visibility="collapsed")
+    if st.button("Sign in", type="primary", use_container_width=True):
+        users = get_users()
+        normalized = counter.strip()
+        if normalized in users:
+            st.session_state.authenticated = True
+            st.session_state.operator_name = users[normalized]
+            st.session_state.counter_number = normalized
+            st.rerun()
+        else:
+            st.error("Counter number not recognized.")
+    st.caption("Authorized management team members only. Counter numbers are not displayed or stored in reports.")
+
+def require_login():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if "counter_number" not in st.session_state:
+        st.session_state.counter_number = ""
+    if not st.session_state.authenticated:
+        login_screen()
+        st.stop()
+
+def logout_button():
+    if st.button("Log out / Change user", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.operator_name = ""
+        st.session_state.counter_number = ""
+        st.session_state.selected_section = None
+        st.rerun()
