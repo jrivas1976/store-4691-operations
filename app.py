@@ -1,4 +1,3 @@
-
 import io
 import re
 from datetime import datetime
@@ -313,6 +312,48 @@ def generate_pdf(rows_by_key,run):
         ("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),3)]))
     story.append(sheet);doc.build(story);out.seek(0);return out.getvalue()
 
+
+def get_users():
+    try:
+        users = dict(st.secrets["users"])
+    except Exception as exc:
+        raise RuntimeError("Missing [users] section in Streamlit Secrets.") from exc
+    return {str(counter).strip(): str(name).strip() for counter, name in users.items()}
+
+def login_screen():
+    st.markdown("""<div class="hero"><h1>O'Reilly Operations Assistant</h1><p>Store 4691 · Management Team Access</p></div>""", unsafe_allow_html=True)
+    st.subheader("Enter your counter number")
+    counter = st.text_input("Counter number", type="password", placeholder="Enter counter number", label_visibility="collapsed")
+    if st.button("Sign in", type="primary", use_container_width=True):
+        users = get_users()
+        normalized = counter.strip()
+        if normalized in users:
+            st.session_state.authenticated = True
+            st.session_state.operator_name = users[normalized]
+            st.session_state.counter_number = normalized
+            st.rerun()
+        else:
+            st.error("Counter number not recognized.")
+    st.caption("Authorized management team members only. Counter numbers are not displayed or stored in reports.")
+
+def require_login():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if "counter_number" not in st.session_state:
+        st.session_state.counter_number = ""
+    if not st.session_state.authenticated:
+        login_screen()
+        st.stop()
+
+def logout_button():
+    if st.button("Log out / Change user", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.operator_name = ""
+        st.session_state.counter_number = ""
+        st.session_state.selected_section = None
+        st.rerun()
+
+
 if "operator_name" not in st.session_state:
     st.session_state.operator_name = ""
 if "selected_section" not in st.session_state:
@@ -398,44 +439,4 @@ with st.expander("Manager controls"):
     if st.button("Reset Today's Shared Checklist",disabled=not confirm,use_container_width=True):
         reset_today(supabase);st.success("Today's shared checklist was reset.");st.rerun()
 
-st.caption("Multiuser Version 4.0 · Counter Login · Supabase shared database · Changes are saved for all users immediately and appear on other devices after refresh.")
-
-def get_users():
-    try:
-        users = dict(st.secrets["users"])
-    except Exception as exc:
-        raise RuntimeError("Missing [users] section in Streamlit Secrets.") from exc
-    return {str(counter).strip(): str(name).strip() for counter, name in users.items()}
-
-def login_screen():
-    st.markdown("""<div class="hero"><h1>O'Reilly Operations Assistant</h1><p>Store 4691 · Management Team Access</p></div>""", unsafe_allow_html=True)
-    st.subheader("Enter your counter number")
-    counter = st.text_input("Counter number", type="password", placeholder="Enter counter number", label_visibility="collapsed")
-    if st.button("Sign in", type="primary", use_container_width=True):
-        users = get_users()
-        normalized = counter.strip()
-        if normalized in users:
-            st.session_state.authenticated = True
-            st.session_state.operator_name = users[normalized]
-            st.session_state.counter_number = normalized
-            st.rerun()
-        else:
-            st.error("Counter number not recognized.")
-    st.caption("Authorized management team members only. Counter numbers are not displayed or stored in reports.")
-
-def require_login():
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-    if "counter_number" not in st.session_state:
-        st.session_state.counter_number = ""
-    if not st.session_state.authenticated:
-        login_screen()
-        st.stop()
-
-def logout_button():
-    if st.button("Log out / Change user", use_container_width=True):
-        st.session_state.authenticated = False
-        st.session_state.operator_name = ""
-        st.session_state.counter_number = ""
-        st.session_state.selected_section = None
-        st.rerun()
+st.caption("Multiuser Version 4.1 · Counter Login · Supabase shared database · Changes are saved for all users immediately and appear on other devices after refresh.")
