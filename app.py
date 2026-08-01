@@ -1,6 +1,6 @@
-
 import io
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Dict, List
 
 import streamlit as st
@@ -82,8 +82,8 @@ SECTIONS = [
         "tasks": [
             ("Open green bag/file returns manifest", "MT", 2, False),
             ("Print reports", "MT", 5, False),
-            ("Count startup tracer bags and safe money; prepare cash drawers", "MT", 20, True),
-            ("Verify deposit tracer bags and combine into one deposit", "MT", 20, True),
+            ("Count startup tracer bags and safe money; prepare cash drawers", "MT", 20, False),
+            ("Verify all deposit tracer bags/combined into 1 deposit", "MT", 20, True),
             ("Verify and process ordered items", "DE", 15, False),
             ("Begin daily returns / credit memo", "DE", 60, False),
         ],
@@ -96,7 +96,7 @@ SECTIONS = [
             ("Verify freight over & short and post to inventory", "MT", 15, False),
             ("Send daily/weekly account statements", "MT", 5, False),
             ("Complete and file daily reports", "MT", 15, False),
-            ("Update sales goals and complete Image Maker", "MT", 5, True),
+            ("Update sales goals and complete Image Maker", "MT", 5, False),
             ("Review payroll and approve punches before 10:00 AM", "M", 5, False),
             ("Check Zipline and delegate assignments", "MT", 15, False),
             ("Enter delivery vehicle mileage in Asset Management", "DE", 5, True),
@@ -107,7 +107,7 @@ SECTIONS = [
         "icon": "📧",
         "tasks": [
             ("Check email", "MT", 5, False),
-            ("Walk store aisle by aisle and create team to-do list", "MT", 15, True),
+            ("Walk store aisle by aisle and create team to-do list", "MT", 15, False),
         ],
     },
     {
@@ -122,7 +122,7 @@ SECTIONS = [
         "icon": "🏦",
         "tasks": [
             ("Take deposit to bank before cutoff", "MT", 30, True),
-            ("Verify cash drawers are locked and drops are being made", "MT", 5, True),
+            ("Verify cash drawers are locked and drops are being made", "MT", 5, False),
         ],
     },
     {
@@ -139,7 +139,7 @@ SECTIONS = [
             ("Process outside purchase billing information", "MT", 10, False),
             ("Complete costing by 5:00 PM", "DE", 15, False),
             ("Check email", "MT", 10, False),
-            ("Complete returns manifest/outgoing freight and add green bag", "DE", 10, True),
+            ("Return manifest completed/outgoing freight wrapped", "DE", 10, True),
             ("Congratulate team for a job well done", "MT", 5, False),
         ],
     },
@@ -147,22 +147,22 @@ SECTIONS = [
         "name": "5:00 PM – Close",
         "icon": "🔒",
         "tasks": [
-            ("Verify cash drawers are locked and drops are being made", "MT", 5, True),
-            ("Complete Image Maker task", "MT", 10, True),
-            ("Verify cash and delivery vehicle keys are locked in safe", "MT", 5, True),
+            ("Verify cash drawers are locked and drops are being made", "MT", 5, False),
+            ("Complete Image Maker task", "MT", 10, False),
+            ("Verify all cash and delivery vehicle keys are locked in the safe after closing", "MT", 5, True),
             ("Complete outstanding Image Maker and assigned tasks", "MT", 10, False),
-            ("Secure delivery vehicles, park, lock and secure keys", "MT", 5, True),
+            ("Secure delivery vehicles, park, lock and secure keys", "MT", 5, False),
         ],
     },
     {
         "name": "After Close",
         "icon": "🌙",
         "tasks": [
-            ("Ensure coffee pot is unplugged", "DE", 1, True),
-            ("Unplug battery chargers", "DE", 1, True),
+            ("Ensure coffee pot is unplugged", "DE", 1, False),
+            ("Unplug battery chargers", "DE", 1, False),
             ("Run Dayend", "MT", 1, False),
-            ("Count remaining drawers, final-count safe and secure all money", "MT", 10, True),
-            ("Set alarm before leaving", "MT", 1, True),
+            ("Count remaining drawers, final-count safe and secure all money", "MT", 10, False),
+            ("Set alarm before leaving", "MT", 1, False),
         ],
     },
     {
@@ -201,11 +201,24 @@ for section in SECTIONS:
             }
         )
 
+
+APP_TIMEZONE = ZoneInfo("America/Chicago")
+
+def now_local() -> datetime:
+    """Current store time for Hidalgo/McAllen, Texas."""
+    return datetime.now(APP_TIMEZONE)
+
+def format_local(dt: datetime | None = None) -> str:
+    value = dt or now_local()
+    return value.strftime("%m/%d/%Y %I:%M:%S %p %Z")
+
 def init_state() -> None:
     if "manager_name" not in st.session_state:
         st.session_state.manager_name = ""
     if "selected_section" not in st.session_state:
         st.session_state.selected_section = None
+    if "day_started_at" not in st.session_state:
+        st.session_state.day_started_at = format_local()
     if "task_data" not in st.session_state:
         st.session_state.task_data = {
             i: {
@@ -213,6 +226,7 @@ def init_state() -> None:
                 "comment": "",
                 "photo_bytes": None,
                 "completed_at": None,
+                "photo_taken_at": None,
             }
             for i in range(len(FLAT_TASKS))
         }
@@ -280,7 +294,7 @@ def generate_pdf(manager_name: str) -> bytes:
         bottomMargin=0.24 * inch,
     )
 
-    now = datetime.now()
+    now = now_local()
     completed = sum(
         1 for value in st.session_state.task_data.values() if value["done"]
     )
@@ -314,6 +328,7 @@ def generate_pdf(manager_name: str) -> bytes:
 
     summary = [
         ["Date", now.strftime("%m/%d/%Y"), "Manager", manager_name or "Not entered"],
+        ["Day Started", st.session_state.day_started_at, "Time Zone", "America/Chicago"],
         ["Generated", now.strftime("%I:%M %p"), "Overall Score", f"{overall_score_local:.0f}%"],
         ["Operations", f"{operations_score:.0f}%", "Store Condition", f"{audit_score_local:.0f}%"],
         ["Completed", str(completed), "Pending", str(total - completed)],
@@ -411,7 +426,7 @@ def generate_pdf(manager_name: str) -> bytes:
                     task["owner"],
                     f"{task['minutes']}m",
                     data["completed_at"] or "-",
-                    Paragraph(data["comment"] or "-", task_style),
+                    Paragraph((data["comment"] or "-") + ("<br/><b>Photo:</b> " + data["photo_taken_at"] if data.get("photo_taken_at") else ""), task_style),
                 ]
             )
 
@@ -469,7 +484,8 @@ def generate_pdf(manager_name: str) -> bytes:
                 photo = image_for_pdf(data["photo_bytes"], width=1.35 * inch)
                 caption = Paragraph(
                     f"<b>{task['task']}</b><br/>"
-                    f"{data['completed_at'] or ''}<br/>"
+                    f"<b>Completed:</b> {data['completed_at'] or ''}<br/>"
+                    f"<b>Photo:</b> {data.get('photo_taken_at') or ''}<br/>"
                     f"{data['comment'] or ''}",
                     small_style,
                 )
@@ -516,7 +532,7 @@ def generate_pdf(manager_name: str) -> bytes:
     return output.getvalue()
 
 init_state()
-today = datetime.now()
+today = now_local()
 
 st.markdown(
     f"""
@@ -532,6 +548,11 @@ st.session_state.manager_name = st.text_input(
     "Manager on Duty",
     value=st.session_state.manager_name,
     placeholder="Enter name",
+)
+
+st.caption(
+    f"Day started: {st.session_state.day_started_at} · "
+    f"Current store time: {format_local()}"
 )
 
 completed_total = sum(1 for value in st.session_state.task_data.values() if value["done"])
@@ -619,16 +640,23 @@ else:
                 key=f"photo_{i}",
             )
 
-            photo_bytes = uploaded.getvalue() if uploaded else data["photo_bytes"]
+            previous_photo = data["photo_bytes"]
+            photo_bytes = uploaded.getvalue() if uploaded else previous_photo
+
+            if uploaded is not None and photo_bytes != previous_photo:
+                data["photo_taken_at"] = format_local()
+
             if photo_bytes:
                 st.image(photo_bytes, use_container_width=True)
+                if data.get("photo_taken_at"):
+                    st.caption(f"Photo recorded: {data['photo_taken_at']}")
 
             data["done"] = bool(done)
             data["comment"] = comment
             data["photo_bytes"] = photo_bytes
 
             if done and not data["completed_at"]:
-                data["completed_at"] = datetime.now().strftime("%m/%d/%Y %I:%M %p")
+                data["completed_at"] = format_local()
             elif not done:
                 data["completed_at"] = None
 
@@ -640,7 +668,8 @@ st.divider()
 missing_required = [
     FLAT_TASKS[i]["task"]
     for i, data in st.session_state.task_data.items()
-    if data["done"] and FLAT_TASKS[i]["photo"] and not data["photo_bytes"]
+    if FLAT_TASKS[i]["photo"]
+    and (not data["done"] or not data["photo_bytes"])
 ]
 
 if missing_required:
@@ -677,11 +706,13 @@ if st.button("Reset Today", use_container_width=True):
             "comment": "",
             "photo_bytes": None,
             "completed_at": None,
+            "photo_taken_at": None,
         }
+    st.session_state.day_started_at = format_local()
     st.session_state.selected_section = None
     st.rerun()
 
 st.caption(
-    "Version 1.0 · Detailed daily routine, mandatory 13-area closing audit and 4-page PDF. "
+    "Version 2.0 · Selected mandatory photos, Central Time timestamps and 4-page PDF. "
     "Permanent cloud history will be added next."
 )
