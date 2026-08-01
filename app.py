@@ -226,24 +226,51 @@ def image_for_pdf(photo_bytes: bytes, width: float = 3.0 * inch):
     return RLImage(output, width=width, height=width * ratio)
 
 def generate_pdf(manager_name: str) -> bytes:
+    """
+    Creates a report with a hard target of no more than four pages:
+
+    Page 1: Executive summary and section scores
+    Pages 2-3: Detailed task list grouped by section
+    Page 4: Selected photographic evidence (up to 6 photos)
+    """
     output = io.BytesIO()
     styles = getSampleStyleSheet()
+
+    # Compact styles so all 35 tasks fit within two detail pages.
+    task_style = styles["BodyText"]
+    task_style.fontSize = 6.8
+    task_style.leading = 8.0
+
+    section_style = styles["Heading3"]
+    section_style.fontSize = 9
+    section_style.leading = 10
+    section_style.textColor = colors.HexColor("#0b5d36")
+    section_style.spaceBefore = 4
+    section_style.spaceAfter = 3
+
+    small_style = styles["BodyText"]
+    small_style.fontSize = 6.5
+    small_style.leading = 7.5
+
     doc = SimpleDocTemplate(
         output,
         pagesize=letter,
-        rightMargin=0.35 * inch,
-        leftMargin=0.35 * inch,
-        topMargin=0.35 * inch,
-        bottomMargin=0.35 * inch,
+        rightMargin=0.28 * inch,
+        leftMargin=0.28 * inch,
+        topMargin=0.28 * inch,
+        bottomMargin=0.28 * inch,
     )
+
     story = [
         Paragraph("O'REILLY OPERATIONS ASSISTANT", styles["Title"]),
-        Paragraph("Store 4691 – Daily Operations Report", styles["Heading2"]),
-        Spacer(1, 8),
+        Paragraph("Store 4691 - Daily Operations Report", styles["Heading2"]),
+        Spacer(1, 6),
     ]
 
     now = datetime.now()
-    completed = sum(1 for value in st.session_state.task_data.values() if value["done"])
+    completed = sum(
+        1 for value in st.session_state.task_data.values() if value["done"]
+    )
     total = len(FLAT_TASKS)
     score = completed / total * 100 if total else 0
 
@@ -252,85 +279,211 @@ def generate_pdf(manager_name: str) -> bytes:
         ["Generated", now.strftime("%I:%M %p"), "Score", f"{score:.0f}%"],
         ["Completed", str(completed), "Pending", str(total - completed)],
     ]
-    table = Table(summary, colWidths=[0.9*inch, 2.1*inch, 0.9*inch, 2.8*inch])
-    table.setStyle(TableStyle([
-        ("GRID",(0,0),(-1,-1),0.4,colors.grey),
-        ("BACKGROUND",(0,0),(0,-1),colors.HexColor("#e8ecea")),
-        ("BACKGROUND",(2,0),(2,-1),colors.HexColor("#e8ecea")),
-        ("FONTSIZE",(0,0),(-1,-1),8.5),
-    ]))
-    story.extend([table, Spacer(1, 8)])
+    table = Table(
+        summary,
+        colWidths=[0.85 * inch, 2.15 * inch, 0.85 * inch, 2.85 * inch],
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e8ecea")),
+                ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#e8ecea")),
+                ("FONTSIZE", (0, 0), (-1, -1), 8.3),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+    story.extend([table, Spacer(1, 7)])
 
     section_rows = [["Section", "Completed", "Total", "Score"]]
     for section in SECTIONS:
         done, sec_total = section_counts(section["name"])
-        section_rows.append([
-            section["name"],
-            done,
-            sec_total,
-            f"{(done/sec_total*100):.0f}%" if sec_total else "0%",
-        ])
+        section_rows.append(
+            [
+                section["name"],
+                done,
+                sec_total,
+                f"{(done / sec_total * 100):.0f}%" if sec_total else "0%",
+            ]
+        )
 
-    sec_table = Table(section_rows, colWidths=[3.9*inch, 0.9*inch, 0.8*inch, 0.9*inch])
-    sec_table.setStyle(TableStyle([
-        ("GRID",(0,0),(-1,-1),0.35,colors.grey),
-        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0b5d36")),
-        ("TEXTCOLOR",(0,0),(-1,0),colors.white),
-        ("FONTSIZE",(0,0),(-1,-1),8),
-    ]))
-    story.extend([sec_table, Spacer(1, 8)])
+    sec_table = Table(
+        section_rows,
+        colWidths=[4.05 * inch, 0.85 * inch, 0.75 * inch, 0.85 * inch],
+    )
+    sec_table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0b5d36")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+    story.extend([sec_table, Spacer(1, 7)])
 
     pending = []
     for i, task in enumerate(FLAT_TASKS):
         data = st.session_state.task_data[i]
         if not data["done"]:
-            pending.append((task["task"], data["comment"] or "No explanation entered"))
+            pending.append(
+                (
+                    task["task"],
+                    data["comment"] or "No explanation entered",
+                )
+            )
 
-    story.append(Paragraph("<b>Pending / Exceptions</b>", styles["Heading2"]))
+    story.append(Paragraph("<b>Pending / Exceptions</b>", styles["Heading3"]))
     if not pending:
         story.append(Paragraph("No pending tasks.", styles["BodyText"]))
     else:
-        for task, note in pending[:12]:
-            story.append(Paragraph(f"• {task} — {note}", styles["BodyText"]))
+        for task_name, note in pending[:8]:
+            story.append(
+                Paragraph(f"- {task_name}: {note}", small_style)
+            )
 
+    # Detailed task pages.
+    story.append(PageBreak())
+    story.append(Paragraph("Detailed Daily Routine", styles["Heading2"]))
+
+    for section in SECTIONS:
+        story.append(Paragraph(section["name"], section_style))
+
+        rows = [["Status", "Task", "Owner", "Est.", "Completed", "Comment"]]
+
+        for i, task in enumerate(FLAT_TASKS):
+            if task["section"] != section["name"]:
+                continue
+
+            data = st.session_state.task_data[i]
+            status = "DONE" if data["done"] else "PENDING"
+            completed_at = data["completed_at"] or "-"
+            comment = data["comment"] or "-"
+
+            rows.append(
+                [
+                    status,
+                    Paragraph(task["task"], task_style),
+                    task["owner"],
+                    f"{task['minutes']}m",
+                    completed_at,
+                    Paragraph(comment, task_style),
+                ]
+            )
+
+        detail_table = Table(
+            rows,
+            colWidths=[
+                0.48 * inch,
+                2.65 * inch,
+                0.40 * inch,
+                0.42 * inch,
+                1.30 * inch,
+                1.75 * inch,
+            ],
+            repeatRows=1,
+        )
+        detail_table.setStyle(
+            TableStyle(
+                [
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#aeb6b1")),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfe9e3")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#153e2f")),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 6.5),
+                    ("FONTSIZE", (0, 1), (-1, -1), 6.3),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+                ]
+            )
+        )
+        story.append(detail_table)
+        story.append(Spacer(1, 3))
+
+    # Keep all photo evidence on a single fourth page.
     photos = []
     for i, task in enumerate(FLAT_TASKS):
         data = st.session_state.task_data[i]
         if data["photo_bytes"]:
-            photos.append((task, data))
+            # Put commented evidence first, then required-photo tasks.
+            priority = 0 if data["comment"] else (1 if task["photo"] else 2)
+            photos.append((priority, task, data))
 
-    photos = photos[:12]
-    for start in range(0, len(photos), 4):
+    photos = sorted(photos, key=lambda item: item[0])[:6]
+
+    if photos:
         story.append(PageBreak())
-        story.append(Paragraph("Photographic Evidence", styles["Heading2"]))
-        batch = photos[start:start+4]
+        story.append(Paragraph("Selected Photographic Evidence", styles["Heading2"]))
+
         grid = []
         row = []
-        for task, data in batch:
+
+        for _, task, data in photos:
             try:
-                photo = image_for_pdf(data["photo_bytes"])
+                photo = image_for_pdf(data["photo_bytes"], width=2.15 * inch)
                 caption = Paragraph(
-                    f"<b>{task['section']}</b><br/>{task['task']}<br/>"
-                    f"{data['completed_at'] or ''}<br/>{data['comment'] or ''}",
-                    styles["BodyText"],
+                    f"<b>{task['section']}</b><br/>"
+                    f"{task['task']}<br/>"
+                    f"{data['completed_at'] or ''}<br/>"
+                    f"{data['comment'] or ''}",
+                    small_style,
                 )
-                cell = Table([[photo],[caption]], colWidths=[3.15*inch])
+                cell = Table(
+                    [[photo], [caption]],
+                    colWidths=[2.25 * inch],
+                )
                 row.append(cell)
-                if len(row) == 2:
+
+                if len(row) == 3:
                     grid.append(row)
                     row = []
             except Exception:
                 continue
+
         if row:
-            row.append("")
+            while len(row) < 3:
+                row.append("")
             grid.append(row)
 
-        photo_table = Table(grid, colWidths=[3.35*inch,3.35*inch])
-        photo_table.setStyle(TableStyle([
-            ("GRID",(0,0),(-1,-1),0.3,colors.grey),
-            ("VALIGN",(0,0),(-1,-1),"TOP"),
-        ]))
+        photo_table = Table(
+            grid,
+            colWidths=[2.35 * inch, 2.35 * inch, 2.35 * inch],
+            rowHeights=[3.35 * inch] * len(grid),
+        )
+        photo_table.setStyle(
+            TableStyle(
+                [
+                    ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
         story.append(photo_table)
+
+        total_photo_count = sum(
+            1
+            for value in st.session_state.task_data.values()
+            if value["photo_bytes"]
+        )
+        if total_photo_count > len(photos):
+            story.append(
+                Spacer(1, 4)
+            )
+            story.append(
+                Paragraph(
+                    f"{total_photo_count - len(photos)} additional photos remain available in the digital session.",
+                    small_style,
+                )
+            )
 
     doc.build(story)
     output.seek(0)
@@ -475,6 +628,6 @@ if st.button("Reset Today", use_container_width=True):
     st.rerun()
 
 st.caption(
-    "Version 0.2 · Grouped routine cards, photo evidence and 4-page PDF. "
+    "Version 0.3 · Detailed task report, photo evidence and 4-page PDF. "
     "Permanent cloud history will be added next."
 )
