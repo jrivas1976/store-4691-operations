@@ -1,718 +1,398 @@
 import io
+import re
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
-from typing import Dict, List
 
+import requests
 import streamlit as st
 from PIL import Image
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
-    Image as RLImage,
-    PageBreak,
-)
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, PageBreak
+from streamlit_autorefresh import st_autorefresh
+from supabase import Client, create_client
 
-st.set_page_config(
-    page_title="O'Reilly Operations Assistant",
-    page_icon="✅",
-    layout="centered",
-    initial_sidebar_state="collapsed",
-)
+st.set_page_config(page_title="O'Reilly Operations Assistant", page_icon="✅", layout="centered", initial_sidebar_state="collapsed")
 
-st.markdown(
-    """
-    <style>
-    .stApp { background: #f5f7f6; }
-    .block-container {
-        max-width: 760px;
-        padding-top: .8rem;
-        padding-bottom: 3rem;
-    }
-    .hero {
-        background: linear-gradient(135deg, #0b5d36, #16864f);
-        color: white;
-        border-radius: 22px;
-        padding: 22px;
-        margin-bottom: 14px;
-        box-shadow: 0 10px 26px rgba(0,0,0,.13);
-    }
-    .hero h1 { margin: 0; font-size: 1.7rem; line-height: 1.15; }
-    .hero p { margin: 8px 0 0 0; opacity: .93; }
-    .module-card {
-        background: white;
-        border-radius: 18px;
-        border: 1px solid #e2e7e4;
-        padding: 15px;
-        margin-bottom: 10px;
-        box-shadow: 0 4px 12px rgba(0,0,0,.04);
-    }
-    .status-complete { color: #0b7a42; font-weight: 800; }
-    .status-progress { color: #b46a00; font-weight: 800; }
-    .status-pending { color: #6b7280; font-weight: 800; }
-    .section-title {
-        font-size: 1.15rem;
-        font-weight: 800;
-        color: #174b37;
-        margin-top: 14px;
-        margin-bottom: 8px;
-    }
-    div.stButton > button, div.stDownloadButton > button {
-        width: 100%;
-        border-radius: 12px;
-        min-height: 46px;
-        font-weight: 700;
-    }
-    [data-testid="stMetricValue"] { font-size: 2rem; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+STORE_NUMBER = "4691"
+APP_TIMEZONE = ZoneInfo("America/Chicago")
+PHOTO_BUCKET = "task-evidence"
+AUDIT_SECTION = "End of Day - Store Condition Audit"
+
+MANDATORY_PHOTO_TASKS = {
+    "Verify all deposit tracer bags/combined into 1 deposit",
+    "Enter delivery vehicle mileage in Asset Management",
+    "Take deposit to bank before cutoff",
+    "Return manifest completed/outgoing freight wrapped",
+    "Verify all cash and delivery vehicle keys are locked in the safe after closing",
+    "Parking Lot", "Trash", "Counter", "Aisle 1", "Aisle 2", "Aisle 3",
+    "Aisle 4", "Aisle 5", "Aisle 6", "Oil Rack", "Battery Rack",
+    "Restroom Mens", "Restroom Womens",
+}
 
 SECTIONS = [
-    {
-        "name": "Prior to Opening",
-        "icon": "🌅",
-        "tasks": [
-            ("Open green bag/file returns manifest", "MT", 2, False),
-            ("Print reports", "MT", 5, False),
-            ("Count startup tracer bags and safe money; prepare cash drawers", "MT", 20, False),
-            ("Verify all deposit tracer bags/combined into 1 deposit", "MT", 20, True),
-            ("Verify and process ordered items", "DE", 15, False),
-            ("Begin daily returns / credit memo", "DE", 60, False),
-        ],
-    },
-    {
-        "name": "Open – 9:00 AM",
-        "icon": "🕘",
-        "tasks": [
-            ("Stock order check-in", "DE", 60, False),
-            ("Verify freight over & short and post to inventory", "MT", 15, False),
-            ("Send daily/weekly account statements", "MT", 5, False),
-            ("Complete and file daily reports", "MT", 15, False),
-            ("Update sales goals and complete Image Maker", "MT", 5, False),
-            ("Review payroll and approve punches before 10:00 AM", "M", 5, False),
-            ("Check Zipline and delegate assignments", "MT", 15, False),
-            ("Enter delivery vehicle mileage in Asset Management", "DE", 5, True),
-        ],
-    },
-    {
-        "name": "9:00 – 10:00 AM",
-        "icon": "📧",
-        "tasks": [
-            ("Check email", "MT", 5, False),
-            ("Walk store aisle by aisle and create team to-do list", "MT", 15, False),
-        ],
-    },
-    {
-        "name": "10:00 – 11:00 AM",
-        "icon": "🗓️",
-        "tasks": [
-            ("Work schedule", "MT", 30, False),
-        ],
-    },
-    {
-        "name": "11:00 AM – 1:00 PM",
-        "icon": "🏦",
-        "tasks": [
-            ("Take deposit to bank before cutoff", "MT", 30, True),
-            ("Verify cash drawers are locked and drops are being made", "MT", 5, False),
-        ],
-    },
-    {
-        "name": "2:00 – 3:00 PM",
-        "icon": "🔄",
-        "tasks": [
-            ("Follow up on Zipline and daily assignments", "MT", 15, False),
-        ],
-    },
-    {
-        "name": "3:00 – 5:00 PM",
-        "icon": "📦",
-        "tasks": [
-            ("Process outside purchase billing information", "MT", 10, False),
-            ("Complete costing by 5:00 PM", "DE", 15, False),
-            ("Check email", "MT", 10, False),
-            ("Return manifest completed/outgoing freight wrapped", "DE", 10, True),
-            ("Congratulate team for a job well done", "MT", 5, False),
-        ],
-    },
-    {
-        "name": "5:00 PM – Close",
-        "icon": "🔒",
-        "tasks": [
-            ("Verify cash drawers are locked and drops are being made", "MT", 5, False),
-            ("Complete Image Maker task", "MT", 10, False),
-            ("Verify all cash and delivery vehicle keys are locked in the safe after closing", "MT", 5, True),
-            ("Complete outstanding Image Maker and assigned tasks", "MT", 10, False),
-            ("Secure delivery vehicles, park, lock and secure keys", "MT", 5, False),
-        ],
-    },
-    {
-        "name": "After Close",
-        "icon": "🌙",
-        "tasks": [
-            ("Ensure coffee pot is unplugged", "DE", 1, False),
-            ("Unplug battery chargers", "DE", 1, False),
-            ("Run Dayend", "MT", 1, False),
-            ("Count remaining drawers, final-count safe and secure all money", "MT", 10, False),
-            ("Set alarm before leaving", "MT", 1, False),
-        ],
-    },
-    {
-        "name": "End of Day - Store Condition Audit",
-        "icon": "📸",
-        "tasks": [
-            ("Parking Lot", "MT", 3, True),
-            ("Trash", "MT", 3, True),
-            ("Counter", "MT", 3, True),
-            ("Aisle 1", "MT", 3, True),
-            ("Aisle 2", "MT", 3, True),
-            ("Aisle 3", "MT", 3, True),
-            ("Aisle 4", "MT", 3, True),
-            ("Aisle 5", "MT", 3, True),
-            ("Aisle 6", "MT", 3, True),
-            ("Oil Rack", "MT", 3, True),
-            ("Battery Rack", "MT", 3, True),
-            ("Restroom Mens", "MT", 3, True),
-            ("Restroom Womens", "MT", 3, True),
-        ],
-    },
-
+    {"name":"Prior to Opening","icon":"🌅","tasks":[
+        ("Open green bag/file returns manifest","MT",2),
+        ("Print reports","MT",5),
+        ("Count startup tracer bags and safe money; prepare cash drawers","MT",20),
+        ("Verify all deposit tracer bags/combined into 1 deposit","MT",20),
+        ("Verify and process ordered items","DE",15),
+        ("Begin daily returns / credit memo","DE",60),
+    ]},
+    {"name":"Open – 9:00 AM","icon":"🕘","tasks":[
+        ("Stock order check-in","DE",60),
+        ("Verify freight over & short and post to inventory","MT",15),
+        ("Send daily/weekly account statements","MT",5),
+        ("Complete and file daily reports","MT",15),
+        ("Update sales goals and complete Image Maker","MT",5),
+        ("Review payroll and approve punches before 10:00 AM","M",5),
+        ("Check Zipline and delegate assignments","MT",15),
+        ("Enter delivery vehicle mileage in Asset Management","DE",5),
+    ]},
+    {"name":"9:00 – 10:00 AM","icon":"📧","tasks":[
+        ("Check email","MT",5),
+        ("Walk store aisle by aisle and create team to-do list","MT",15),
+    ]},
+    {"name":"10:00 – 11:00 AM","icon":"🗓️","tasks":[("Work schedule","MT",30)]},
+    {"name":"11:00 AM – 1:00 PM","icon":"🏦","tasks":[
+        ("Take deposit to bank before cutoff","MT",30),
+        ("Verify cash drawers are locked and drops are being made","MT",5),
+    ]},
+    {"name":"2:00 – 3:00 PM","icon":"🔄","tasks":[
+        ("Follow up on Zipline and daily assignments","MT",15),
+    ]},
+    {"name":"3:00 – 5:00 PM","icon":"📦","tasks":[
+        ("Process outside purchase billing information","MT",10),
+        ("Complete costing by 5:00 PM","DE",15),
+        ("Check email","MT",10),
+        ("Return manifest completed/outgoing freight wrapped","DE",10),
+        ("Congratulate team for a job well done","MT",5),
+    ]},
+    {"name":"5:00 PM – Close","icon":"🔒","tasks":[
+        ("Verify cash drawers are locked and drops are being made","MT",5),
+        ("Complete Image Maker task","MT",10),
+        ("Verify all cash and delivery vehicle keys are locked in the safe after closing","MT",5),
+        ("Complete outstanding Image Maker and assigned tasks","MT",10),
+        ("Secure delivery vehicles, park, lock and secure keys","MT",5),
+    ]},
+    {"name":"After Close","icon":"🌙","tasks":[
+        ("Ensure coffee pot is unplugged","DE",1),
+        ("Unplug battery chargers","DE",1),
+        ("Run Dayend","MT",1),
+        ("Count remaining drawers, final-count safe and secure all money","MT",10),
+        ("Set alarm before leaving","MT",1),
+    ]},
+    {"name":AUDIT_SECTION,"icon":"📸","tasks":[
+        ("Parking Lot","MT",3),("Trash","MT",3),("Counter","MT",3),
+        ("Aisle 1","MT",3),("Aisle 2","MT",3),("Aisle 3","MT",3),
+        ("Aisle 4","MT",3),("Aisle 5","MT",3),("Aisle 6","MT",3),
+        ("Oil Rack","MT",3),("Battery Rack","MT",3),
+        ("Restroom Mens","MT",3),("Restroom Womens","MT",3),
+    ]},
 ]
 
 FLAT_TASKS = []
 for section in SECTIONS:
-    for task in section["tasks"]:
-        FLAT_TASKS.append(
-            {
-                "section": section["name"],
-                "icon": section["icon"],
-                "task": task[0],
-                "owner": task[1],
-                "minutes": task[2],
-                "photo": task[3],
-            }
+    for position, (task_name, owner, minutes) in enumerate(section["tasks"], start=1):
+        task_key = re.sub(r"[^a-z0-9]+", "-", f"{section['name']}-{task_name}".lower()).strip("-")
+        FLAT_TASKS.append({
+            "task_key":task_key,"section":section["name"],"icon":section["icon"],
+            "task":task_name,"owner":owner,"minutes":minutes,"position":position,
+            "photo_required":task_name in MANDATORY_PHOTO_TASKS,
+        })
+
+st.markdown("""
+<style>
+.stApp{background:#f5f7f6}.block-container{max-width:780px;padding-top:.8rem;padding-bottom:3rem}
+.hero{background:linear-gradient(135deg,#0b5d36,#16864f);color:white;border-radius:22px;padding:22px;margin-bottom:14px;box-shadow:0 10px 26px rgba(0,0,0,.13)}
+.hero h1{margin:0;font-size:1.7rem;line-height:1.15}.hero p{margin:8px 0 0;opacity:.93}
+.status-complete{color:#0b7a42;font-weight:800}.status-progress{color:#b46a00;font-weight:800}.status-pending{color:#6b7280;font-weight:800}
+.section-title{font-size:1.15rem;font-weight:800;color:#174b37;margin:14px 0 8px}
+div.stButton>button,div.stDownloadButton>button{width:100%;border-radius:12px;min-height:46px;font-weight:700}
+[data-testid="stMetricValue"]{font-size:1.75rem}
+</style>
+""", unsafe_allow_html=True)
+
+def now_local(): return datetime.now(APP_TIMEZONE)
+def iso_now(): return now_local().isoformat()
+def work_date(): return now_local().date().isoformat()
+
+def display_datetime(value):
+    if not value: return "-"
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z","+00:00"))
+        return dt.astimezone(APP_TIMEZONE).strftime("%m/%d/%Y %I:%M:%S %p %Z")
+    except Exception:
+        return str(value)
+
+@st.cache_resource
+def get_supabase():
+    try:
+        return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+    except KeyError as exc:
+        raise RuntimeError("Missing SUPABASE_URL or SUPABASE_KEY in Streamlit Secrets.") from exc
+
+def public_photo_url(path):
+    return f"{str(st.secrets['SUPABASE_URL']).rstrip('/')}/storage/v1/object/public/{PHOTO_BUCKET}/{path}"
+
+def initialize_today(client):
+    today = work_date()
+    client.table("daily_runs").upsert(
+        {"store_number":STORE_NUMBER,"work_date":today,"day_started_at":iso_now()},
+        on_conflict="store_number,work_date", ignore_duplicates=True
+    ).execute()
+    rows = [{
+        "store_number":STORE_NUMBER,"work_date":today,"task_key":t["task_key"],
+        "section_name":t["section"],"task_name":t["task"],"completed":False,
+        "updated_at":iso_now()
+    } for t in FLAT_TASKS]
+    client.table("daily_tasks").upsert(
+        rows,on_conflict="store_number,work_date,task_key",ignore_duplicates=True
+    ).execute()
+
+def load_rows(client):
+    r=(client.table("daily_tasks").select("*").eq("store_number",STORE_NUMBER)
+       .eq("work_date",work_date()).execute())
+    return r.data or []
+
+def load_run(client):
+    r=(client.table("daily_runs").select("*").eq("store_number",STORE_NUMBER)
+       .eq("work_date",work_date()).limit(1).execute())
+    return r.data[0] if r.data else {}
+
+def update_manager(client, manager):
+    client.table("daily_runs").upsert(
+        {"store_number":STORE_NUMBER,"work_date":work_date(),
+         "manager_on_duty":manager.strip() or None},
+        on_conflict="store_number,work_date"
+    ).execute()
+
+def save_task(client, task, completed, operator, comment, uploaded, current):
+    if not operator.strip():
+        raise ValueError("Enter your name before saving a task.")
+    photo_url=current.get("photo_url")
+    photo_taken=current.get("photo_taken_at")
+    if uploaded is not None:
+        ext=Path(uploaded.name).suffix.lower() or ".jpg"
+        stamp=now_local().strftime("%Y%m%d-%H%M%S-%f")
+        path=f"store-{STORE_NUMBER}/{work_date()}/{task['task_key']}/{stamp}{ext}"
+        client.storage.from_(PHOTO_BUCKET).upload(
+            path, uploaded.getvalue(),
+            file_options={"content-type":uploaded.type or "image/jpeg"}
         )
+        photo_url=public_photo_url(path)
+        photo_taken=iso_now()
+    if task["photo_required"] and completed and not photo_url:
+        raise ValueError("This task requires a photo before completion.")
+    completed_at=current.get("completed_at")
+    completed_by=current.get("completed_by")
+    if completed and not current.get("completed"):
+        completed_at=iso_now(); completed_by=operator.strip()
+    elif not completed:
+        completed_at=None; completed_by=None
+    payload={
+        "store_number":STORE_NUMBER,"work_date":work_date(),"task_key":task["task_key"],
+        "section_name":task["section"],"task_name":task["task"],"completed":completed,
+        "completed_by":completed_by,"completed_at":completed_at,
+        "comment":comment.strip() or None,"photo_url":photo_url,
+        "photo_taken_at":photo_taken,"updated_at":iso_now()
+    }
+    client.table("daily_tasks").upsert(
+        payload,on_conflict="store_number,work_date,task_key"
+    ).execute()
 
+def reset_today(client):
+    client.table("daily_tasks").delete().eq("store_number",STORE_NUMBER).eq("work_date",work_date()).execute()
+    client.table("daily_runs").delete().eq("store_number",STORE_NUMBER).eq("work_date",work_date()).execute()
+    initialize_today(client)
 
-APP_TIMEZONE = ZoneInfo("America/Chicago")
+def section_counts(name, rows_by_key):
+    tasks=[t for t in FLAT_TASKS if t["section"]==name]
+    done=0
+    for t in tasks:
+        row=rows_by_key.get(t["task_key"],{})
+        valid=bool(row.get("completed"))
+        if t["photo_required"]: valid=valid and bool(row.get("photo_url"))
+        done+=int(valid)
+    return done,len(tasks)
 
-def now_local() -> datetime:
-    """Current store time for Hidalgo/McAllen, Texas."""
-    return datetime.now(APP_TIMEZONE)
+def section_status(done,total):
+    if total and done==total:return "Complete","status-complete"
+    if done:return "In Progress","status-progress"
+    return "Pending","status-pending"
 
-def format_local(dt: datetime | None = None) -> str:
-    value = dt or now_local()
-    return value.strftime("%m/%d/%Y %I:%M:%S %p %Z")
+def fetch_image(url):
+    if not url:return None
+    try:
+        r=requests.get(url,timeout=12);r.raise_for_status();return r.content
+    except Exception:return None
 
-def init_state() -> None:
-    if "manager_name" not in st.session_state:
-        st.session_state.manager_name = ""
-    if "selected_section" not in st.session_state:
-        st.session_state.selected_section = None
-    if "day_started_at" not in st.session_state:
-        st.session_state.day_started_at = format_local()
-    if "task_data" not in st.session_state:
-        st.session_state.task_data = {
-            i: {
-                "done": False,
-                "comment": "",
-                "photo_bytes": None,
-                "completed_at": None,
-                "photo_taken_at": None,
-            }
-            for i in range(len(FLAT_TASKS))
-        }
+def image_for_pdf(data,width):
+    img=Image.open(io.BytesIO(data)).convert("RGB");img.thumbnail((900,700))
+    out=io.BytesIO();img.save(out,"JPEG",quality=68,optimize=True);out.seek(0)
+    return RLImage(out,width=width,height=width*(img.height/img.width))
 
-def section_counts(section_name: str):
-    indexes = [i for i, task in enumerate(FLAT_TASKS) if task["section"] == section_name]
-    completed = sum(1 for i in indexes if st.session_state.task_data[i]["done"])
-    return completed, len(indexes)
-
-def section_status(section_name: str) -> str:
-    completed, total = section_counts(section_name)
-    if completed == total:
-        return "Complete"
-    if completed > 0:
-        return "In Progress"
-    return "Pending"
-
-def section_status_class(status: str) -> str:
-    return {
-        "Complete": "status-complete",
-        "In Progress": "status-progress",
-        "Pending": "status-pending",
-    }[status]
-
-def image_for_pdf(photo_bytes: bytes, width: float = 3.0 * inch):
-    image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
-    image.thumbnail((1100, 850))
-    output = io.BytesIO()
-    image.save(output, format="JPEG", quality=72, optimize=True)
-    output.seek(0)
-    ratio = image.height / image.width
-    return RLImage(output, width=width, height=width * ratio)
-
-def generate_pdf(manager_name: str) -> bytes:
-    """
-    Generates a maximum 4-page report:
-    Page 1: Executive summary and section scores
-    Pages 2-3: Detailed tasks
-    Page 4: Store Condition Audit photo contact sheet
-    """
-    output = io.BytesIO()
-    styles = getSampleStyleSheet()
-
-    task_style = styles["BodyText"]
-    task_style.fontSize = 6.6
-    task_style.leading = 7.8
-
-    small_style = styles["BodyText"]
-    small_style.fontSize = 6.2
-    small_style.leading = 7.2
-
-    section_style = styles["Heading3"]
-    section_style.fontSize = 8.8
-    section_style.leading = 9.8
-    section_style.textColor = colors.HexColor("#0b5d36")
-    section_style.spaceBefore = 3
-    section_style.spaceAfter = 2
-
-    doc = SimpleDocTemplate(
-        output,
-        pagesize=letter,
-        rightMargin=0.24 * inch,
-        leftMargin=0.24 * inch,
-        topMargin=0.24 * inch,
-        bottomMargin=0.24 * inch,
-    )
-
-    now = now_local()
-    completed = sum(
-        1 for value in st.session_state.task_data.values() if value["done"]
-    )
-    total = len(FLAT_TASKS)
-    operations_score = completed / total * 100 if total else 0
-
-    audit_indexes_local = [
-        i for i, task in enumerate(FLAT_TASKS)
-        if task["section"] == "End of Day - Store Condition Audit"
+def generate_pdf(rows_by_key,run):
+    out=io.BytesIO();styles=getSampleStyleSheet()
+    body=styles["BodyText"];body.fontSize=6.1;body.leading=7.0
+    tiny=styles["BodyText"];tiny.fontSize=5.6;tiny.leading=6.4
+    secstyle=styles["Heading3"];secstyle.fontSize=8.4;secstyle.leading=9
+    secstyle.textColor=colors.HexColor("#0b5d36");secstyle.spaceBefore=3;secstyle.spaceAfter=2
+    doc=SimpleDocTemplate(out,pagesize=letter,rightMargin=.22*inch,leftMargin=.22*inch,topMargin=.22*inch,bottomMargin=.22*inch)
+    ops=[t for t in FLAT_TASKS if t["section"]!=AUDIT_SECTION]
+    aud=[t for t in FLAT_TASKS if t["section"]==AUDIT_SECTION]
+    ops_done=sum(1 for t in ops if rows_by_key.get(t["task_key"],{}).get("completed") and (not t["photo_required"] or rows_by_key.get(t["task_key"],{}).get("photo_url")))
+    aud_done=sum(1 for t in aud if rows_by_key.get(t["task_key"],{}).get("completed") and rows_by_key.get(t["task_key"],{}).get("photo_url"))
+    ops_score=ops_done/len(ops)*100;aud_score=aud_done/len(aud)*100;overall=(ops_score+aud_score)/2
+    story=[Paragraph("O'REILLY OPERATIONS ASSISTANT",styles["Title"]),
+           Paragraph("Store 4691 - Shared Daily Operations Report",styles["Heading2"]),Spacer(1,5)]
+    summary=[
+        ["Date",work_date(),"Manager",run.get("manager_on_duty") or "Not entered"],
+        ["Generated",display_datetime(iso_now()),"Overall",f"{overall:.0f}%"],
+        ["Operations",f"{ops_score:.0f}%","Store Condition",f"{aud_score:.0f}%"],
+        ["Day Started",display_datetime(run.get("day_started_at")),"Users","Management Team"],
     ]
-    audit_completed_local = sum(
-        1 for i in audit_indexes_local
-        if st.session_state.task_data[i]["done"]
-        and st.session_state.task_data[i]["photo_bytes"]
-    )
-    audit_total_local = len(audit_indexes_local)
-    audit_score_local = (
-        audit_completed_local / audit_total_local * 100
-        if audit_total_local else 0
-    )
-    overall_score_local = (
-        (operations_score + audit_score_local) / 2
-        if audit_total_local else operations_score
-    )
-
-    story = [
-        Paragraph("O'REILLY OPERATIONS ASSISTANT", styles["Title"]),
-        Paragraph("Store 4691 - Daily Operations Report", styles["Heading2"]),
-        Spacer(1, 5),
-    ]
-
-    summary = [
-        ["Date", now.strftime("%m/%d/%Y"), "Manager", manager_name or "Not entered"],
-        ["Day Started", st.session_state.day_started_at, "Time Zone", "America/Chicago"],
-        ["Generated", now.strftime("%I:%M %p"), "Overall Score", f"{overall_score_local:.0f}%"],
-        ["Operations", f"{operations_score:.0f}%", "Store Condition", f"{audit_score_local:.0f}%"],
-        ["Completed", str(completed), "Pending", str(total - completed)],
-    ]
-    summary_table = Table(
-        summary,
-        colWidths=[0.85 * inch, 2.15 * inch, 1.05 * inch, 2.65 * inch],
-    )
-    summary_table.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e8ecea")),
-                ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#e8ecea")),
-                ("FONTSIZE", (0, 0), (-1, -1), 8.1),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ]
-        )
-    )
-    story.extend([summary_table, Spacer(1, 6)])
-
-    section_rows = [["Section", "Completed", "Total", "Score"]]
-    for section in SECTIONS:
-        done, sec_total = section_counts(section["name"])
-        # Store Condition counts only items with both check and photo.
-        if section["name"] == "End of Day - Store Condition Audit":
-            done = sum(
-                1 for i in audit_indexes_local
-                if st.session_state.task_data[i]["done"]
-                and st.session_state.task_data[i]["photo_bytes"]
-            )
-        section_rows.append(
-            [
-                section["name"],
-                done,
-                sec_total,
-                f"{(done / sec_total * 100):.0f}%" if sec_total else "0%",
-            ]
-        )
-
-    section_table = Table(
-        section_rows,
-        colWidths=[4.0 * inch, 0.85 * inch, 0.75 * inch, 0.85 * inch],
-    )
-    section_table.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0b5d36")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTSIZE", (0, 0), (-1, -1), 7.2),
-            ]
-        )
-    )
-    story.extend([section_table, Spacer(1, 5)])
-
-    pending = []
-    for i, task in enumerate(FLAT_TASKS):
-        data = st.session_state.task_data[i]
-        photo_missing = task["photo"] and not data["photo_bytes"]
-        if not data["done"] or photo_missing:
-            reason = data["comment"] or (
-                "Required photo missing" if photo_missing else "No explanation entered"
-            )
-            pending.append((task["task"], reason))
-
-    story.append(Paragraph("<b>Pending / Exceptions</b>", styles["Heading3"]))
-    if not pending:
-        story.append(Paragraph("No pending tasks.", styles["BodyText"]))
-    else:
-        for task_name, note in pending[:8]:
-            story.append(Paragraph(f"- {task_name}: {note}", small_style))
-
-    # Pages 2-3: detailed tasks, excluding audit photos from the long task tables.
-    story.append(PageBreak())
-    story.append(Paragraph("Detailed Daily Routine", styles["Heading2"]))
-
-    for section in SECTIONS:
-        if section["name"] == "End of Day - Store Condition Audit":
-            continue
-
-        story.append(Paragraph(section["name"], section_style))
-        rows = [["Status", "Task", "Owner", "Est.", "Completed", "Comment"]]
-
-        for i, task in enumerate(FLAT_TASKS):
-            if task["section"] != section["name"]:
-                continue
-
-            data = st.session_state.task_data[i]
-            status = "DONE" if data["done"] else "PENDING"
-            rows.append(
-                [
-                    status,
-                    Paragraph(task["task"], task_style),
-                    task["owner"],
-                    f"{task['minutes']}m",
-                    data["completed_at"] or "-",
-                    Paragraph((data["comment"] or "-") + ("<br/><b>Photo:</b> " + data["photo_taken_at"] if data.get("photo_taken_at") else ""), task_style),
-                ]
-            )
-
-        detail_table = Table(
-            rows,
-            colWidths=[
-                0.48 * inch,
-                2.65 * inch,
-                0.40 * inch,
-                0.42 * inch,
-                1.30 * inch,
-                1.75 * inch,
-            ],
-            repeatRows=1,
-        )
-        detail_table.setStyle(
-            TableStyle(
-                [
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#aeb6b1")),
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfe9e3")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#153e2f")),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, 0), 6.3),
-                    ("FONTSIZE", (0, 1), (-1, -1), 6.1),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 3),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                    ("TOPPADDING", (0, 0), (-1, -1), 2.2),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2),
-                ]
-            )
-        )
-        story.append(detail_table)
-        story.append(Spacer(1, 2))
-
-    # Page 4: mandatory store-condition audit photos.
-    story.append(PageBreak())
-    story.append(Paragraph("End of Day - Store Condition Audit", styles["Heading2"]))
-    story.append(
-        Paragraph(
-            f"Completed with photo: {audit_completed_local}/{audit_total_local} "
-            f"({audit_score_local:.0f}%)",
-            styles["BodyText"],
-        )
-    )
-    story.append(Spacer(1, 4))
-
-    audit_cards = []
-    for i in audit_indexes_local:
-        task = FLAT_TASKS[i]
-        data = st.session_state.task_data[i]
-
-        if data["photo_bytes"]:
+    t=Table(summary,colWidths=[.85*inch,2.15*inch,1.05*inch,2.65*inch])
+    t.setStyle(TableStyle([("GRID",(0,0),(-1,-1),.4,colors.grey),
+        ("BACKGROUND",(0,0),(0,-1),colors.HexColor("#e8ecea")),
+        ("BACKGROUND",(2,0),(2,-1),colors.HexColor("#e8ecea")),
+        ("FONTSIZE",(0,0),(-1,-1),7.7)]))
+    story += [t,Spacer(1,5)]
+    sr=[["Section","Completed","Total","Score"]]
+    for s in SECTIONS:
+        d,total=section_counts(s["name"],rows_by_key);sr.append([s["name"],d,total,f"{d/total*100:.0f}%"])
+    stbl=Table(sr,colWidths=[4*inch,.85*inch,.75*inch,.85*inch])
+    stbl.setStyle(TableStyle([("GRID",(0,0),(-1,-1),.3,colors.grey),
+        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0b5d36")),
+        ("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTSIZE",(0,0),(-1,-1),6.8)]))
+    story.append(stbl);story.append(PageBreak());story.append(Paragraph("Detailed Daily Routine",styles["Heading2"]))
+    for s in SECTIONS:
+        if s["name"]==AUDIT_SECTION:continue
+        story.append(Paragraph(s["name"],secstyle))
+        rows=[["Status","Task","By","Completed","Comment"]]
+        for task in FLAT_TASKS:
+            if task["section"]!=s["name"]:continue
+            row=rows_by_key.get(task["task_key"],{})
+            comment=row.get("comment") or "-"
+            if row.get("photo_taken_at"):comment+=f"<br/><b>Photo:</b> {display_datetime(row.get('photo_taken_at'))}"
+            rows.append(["DONE" if row.get("completed") else "PENDING",
+                         Paragraph(task["task"],body),row.get("completed_by") or "-",
+                         display_datetime(row.get("completed_at")),Paragraph(comment,body)])
+        dt=Table(rows,colWidths=[.48*inch,2.75*inch,.85*inch,1.35*inch,1.65*inch],repeatRows=1)
+        dt.setStyle(TableStyle([("GRID",(0,0),(-1,-1),.22,colors.HexColor("#aeb6b1")),
+            ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#dfe9e3")),
+            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,0),6),
+            ("FONTSIZE",(0,1),(-1,-1),5.9),("VALIGN",(0,0),(-1,-1),"TOP"),
+            ("LEFTPADDING",(0,0),(-1,-1),2.5),("RIGHTPADDING",(0,0),(-1,-1),2.5),
+            ("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
+        story += [dt,Spacer(1,2)]
+    story.append(PageBreak());story.append(Paragraph("Required Photographic Evidence",styles["Heading2"]))
+    cards=[]
+    for task in [t for t in FLAT_TASKS if t["photo_required"]]:
+        row=rows_by_key.get(task["task_key"],{});data=fetch_image(row.get("photo_url"))
+        if data:
             try:
-                photo = image_for_pdf(data["photo_bytes"], width=1.35 * inch)
-                caption = Paragraph(
-                    f"<b>{task['task']}</b><br/>"
-                    f"<b>Completed:</b> {data['completed_at'] or ''}<br/>"
-                    f"<b>Photo:</b> {data.get('photo_taken_at') or ''}<br/>"
-                    f"{data['comment'] or ''}",
-                    small_style,
-                )
-                card = Table([[photo], [caption]], colWidths=[1.45 * inch])
-            except Exception:
-                card = Paragraph(f"<b>{task['task']}</b><br/>Photo error", small_style)
-        else:
-            card = Paragraph(
-                f"<b>{task['task']}</b><br/>PHOTO MISSING",
-                small_style,
-            )
-
-        audit_cards.append(card)
-
-    # 4 columns x 4 rows fits all 13 areas on one page.
-    grid = []
-    for start in range(0, len(audit_cards), 4):
-        row = audit_cards[start:start + 4]
-        while len(row) < 4:
-            row.append("")
+                photo=image_for_pdf(data,1.2*inch)
+                cap=Paragraph(f"<b>{task['task']}</b><br/>{row.get('completed_by') or '-'}<br/>{display_datetime(row.get('photo_taken_at'))}",tiny)
+                card=Table([[photo],[cap]],colWidths=[1.35*inch])
+            except Exception:card=Paragraph(f"<b>{task['task']}</b><br/>Photo error",tiny)
+        else:card=Paragraph(f"<b>{task['task']}</b><br/>PHOTO MISSING",tiny)
+        cards.append(card)
+    grid=[]
+    for i in range(0,len(cards),4):
+        row=cards[i:i+4]
+        while len(row)<4:row.append("")
         grid.append(row)
+    sheet=Table(grid,colWidths=[1.75*inch]*4,rowHeights=[1.95*inch]*len(grid))
+    sheet.setStyle(TableStyle([("GRID",(0,0),(-1,-1),.25,colors.grey),
+        ("VALIGN",(0,0),(-1,-1),"TOP"),("LEFTPADDING",(0,0),(-1,-1),3),
+        ("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),3)]))
+    story.append(sheet);doc.build(story);out.seek(0);return out.getvalue()
 
-    audit_table = Table(
-        grid,
-        colWidths=[1.75 * inch] * 4,
-        rowHeights=[2.35 * inch] * len(grid),
-    )
-    audit_table.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 3),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ]
-        )
-    )
-    story.append(audit_table)
+if "operator_name" not in st.session_state:st.session_state.operator_name=""
+if "selected_section" not in st.session_state:st.session_state.selected_section=None
+if "auto_refresh" not in st.session_state:st.session_state.auto_refresh=True
 
-    doc.build(story)
-    output.seek(0)
-    return output.getvalue()
+try:
+    supabase=get_supabase();initialize_today(supabase)
+except Exception as exc:
+    st.error(f"Database connection error: {exc}");st.stop()
 
-init_state()
-today = now_local()
+with st.sidebar:
+    st.header("Shared App")
+    st.session_state.auto_refresh=st.toggle("Auto-refresh every 10 seconds",value=st.session_state.auto_refresh)
+    if st.button("Refresh now",use_container_width=True):st.rerun()
+if st.session_state.auto_refresh:st_autorefresh(interval=10000,key="shared_db_refresh")
 
-st.markdown(
-    f"""
-    <div class="hero">
-        <h1>O'Reilly Operations Assistant</h1>
-        <p>Store 4691 · {today.strftime("%A, %B %d, %Y")}</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+rows=load_rows(supabase);rows_by_key={r["task_key"]:r for r in rows};run=load_run(supabase)
+today=now_local()
+st.markdown(f"""<div class="hero"><h1>O'Reilly Operations Assistant</h1>
+<p>Store {STORE_NUMBER} · {today.strftime("%A, %B %d, %Y")}</p><p>Shared Management Team Checklist</p></div>""",unsafe_allow_html=True)
 
-st.session_state.manager_name = st.text_input(
-    "Manager on Duty",
-    value=st.session_state.manager_name,
-    placeholder="Enter name",
-)
+operator=st.text_input("Your name",value=st.session_state.operator_name,placeholder="Name of person using this device")
+st.session_state.operator_name=operator
+manager=st.text_input("Manager on Duty",value=run.get("manager_on_duty") or "",placeholder="Manager on Duty")
+if manager!=(run.get("manager_on_duty") or ""):
+    if st.button("Save Manager on Duty",use_container_width=True):
+        update_manager(supabase,manager);st.success("Manager on Duty saved.");st.rerun()
 
-st.caption(
-    f"Day started: {st.session_state.day_started_at} · "
-    f"Current store time: {format_local()}"
-)
-
-completed_total = sum(1 for value in st.session_state.task_data.values() if value["done"])
-pending_total = len(FLAT_TASKS) - completed_total
-score = completed_total / len(FLAT_TASKS) * 100 if FLAT_TASKS else 0
-
-audit_indexes = [
-    i for i, task in enumerate(FLAT_TASKS)
-    if task["section"] == "End of Day - Store Condition Audit"
-]
-audit_completed = sum(
-    1 for i in audit_indexes
-    if st.session_state.task_data[i]["done"]
-    and st.session_state.task_data[i]["photo_bytes"]
-)
-audit_total = len(audit_indexes)
-audit_score = (audit_completed / audit_total * 100) if audit_total else 0
-overall_score = ((score + audit_score) / 2) if audit_total else score
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Completed", completed_total)
-c2.metric("Pending", pending_total)
-c3.metric("Operations", f"{score:.0f}%")
-c4.metric("Store Condition", f"{audit_score:.0f}%")
-st.progress(overall_score / 100)
-st.caption(f"Overall Daily Score: {overall_score:.0f}%")
+ops=[t for t in FLAT_TASKS if t["section"]!=AUDIT_SECTION];aud=[t for t in FLAT_TASKS if t["section"]==AUDIT_SECTION]
+ops_done=sum(1 for t in ops if rows_by_key.get(t["task_key"],{}).get("completed") and (not t["photo_required"] or rows_by_key.get(t["task_key"],{}).get("photo_url")))
+aud_done=sum(1 for t in aud if rows_by_key.get(t["task_key"],{}).get("completed") and rows_by_key.get(t["task_key"],{}).get("photo_url"))
+ops_score=ops_done/len(ops)*100;aud_score=aud_done/len(aud)*100;overall=(ops_score+aud_score)/2
+c1,c2,c3,c4=st.columns(4)
+c1.metric("Completed",ops_done+aud_done);c2.metric("Pending",len(FLAT_TASKS)-ops_done-aud_done)
+c3.metric("Operations",f"{ops_score:.0f}%");c4.metric("Condition",f"{aud_score:.0f}%")
+st.progress(overall/100);st.caption(f"Overall Daily Score: {overall:.0f}% · Last refreshed: {now_local().strftime('%I:%M:%S %p %Z')}")
 
 if st.session_state.selected_section is None:
-    st.markdown('<div class="section-title">Daily Routine</div>', unsafe_allow_html=True)
-
-    for section in SECTIONS:
-        done, total = section_counts(section["name"])
-        status = section_status(section["name"])
-        css_class = section_status_class(status)
-
+    st.markdown('<div class="section-title">Daily Routine</div>',unsafe_allow_html=True)
+    for s in SECTIONS:
+        d,total=section_counts(s["name"],rows_by_key);status,css=section_status(d,total)
         with st.container(border=True):
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown(
-                    f"### {section['icon']} {section['name']}\n"
-                    f"<span class='{css_class}'>{status}</span> · {done}/{total} tasks",
-                    unsafe_allow_html=True,
-                )
-            with col2:
-                if st.button("Open", key=f"open_{section['name']}", use_container_width=True):
-                    st.session_state.selected_section = section["name"]
-                    st.rerun()
-
+            l,r=st.columns([4,1])
+            with l:st.markdown(f"### {s['icon']} {s['name']}\n<span class='{css}'>{status}</span> · {d}/{total} tasks",unsafe_allow_html=True)
+            with r:
+                if st.button("Open",key=f"open-{s['name']}",use_container_width=True):
+                    st.session_state.selected_section=s["name"];st.rerun()
 else:
-    selected = st.session_state.selected_section
-    if st.button("← Back to Daily Routine", use_container_width=True):
-        st.session_state.selected_section = None
-        st.rerun()
-
-    st.markdown(f'<div class="section-title">{selected}</div>', unsafe_allow_html=True)
-
-    for i, task in enumerate(FLAT_TASKS):
-        if task["section"] != selected:
-            continue
-
-        data = st.session_state.task_data[i]
-
+    selected=st.session_state.selected_section
+    if st.button("← Back to Daily Routine",use_container_width=True):
+        st.session_state.selected_section=None;st.rerun()
+    st.markdown(f'<div class="section-title">{selected}</div>',unsafe_allow_html=True)
+    for task in FLAT_TASKS:
+        if task["section"]!=selected:continue
+        row=rows_by_key.get(task["task_key"],{})
         with st.container(border=True):
-            done = st.checkbox(
-                task["task"],
-                value=data["done"],
-                key=f"done_{i}",
-            )
-
-            st.caption(
-                f"Owner: {task['owner']} · Estimated: {task['minutes']} min"
-                + (" · Photo required" if task["photo"] else "")
-            )
-
-            comment = st.text_input(
-                "Comment",
-                value=data["comment"],
-                key=f"comment_{i}",
-                placeholder="Optional comment or exception",
-            )
-
-            uploaded = st.file_uploader(
-                "Take or upload photo",
-                type=["jpg","jpeg","png"],
-                key=f"photo_{i}",
-            )
-
-            previous_photo = data["photo_bytes"]
-            photo_bytes = uploaded.getvalue() if uploaded else previous_photo
-
-            if uploaded is not None and photo_bytes != previous_photo:
-                data["photo_taken_at"] = format_local()
-
-            if photo_bytes:
-                st.image(photo_bytes, use_container_width=True)
-                if data.get("photo_taken_at"):
-                    st.caption(f"Photo recorded: {data['photo_taken_at']}")
-
-            data["done"] = bool(done)
-            data["comment"] = comment
-            data["photo_bytes"] = photo_bytes
-
-            if done and not data["completed_at"]:
-                data["completed_at"] = format_local()
-            elif not done:
-                data["completed_at"] = None
-
-            if done and task["photo"] and not photo_bytes:
-                st.warning("This task requires photographic evidence.")
+            st.markdown(f"### {task['task']}")
+            st.caption(f"Owner: {task['owner']} · Estimated: {task['minutes']} min"+(" · 📷 Photo required" if task["photo_required"] else ""))
+            if row.get("completed"):st.success(f"Completed by {row.get('completed_by') or '-'} · {display_datetime(row.get('completed_at'))}")
+            completed=st.checkbox("Completed",value=bool(row.get("completed")),key=f"done-{task['task_key']}")
+            comment=st.text_input("Comment",value=row.get("comment") or "",key=f"comment-{task['task_key']}",placeholder="Optional comment or exception")
+            uploaded=st.file_uploader("Take or upload photo",type=["jpg","jpeg","png"],key=f"photo-{task['task_key']}")
+            if row.get("photo_url"):
+                st.image(row["photo_url"],use_container_width=True)
+                st.caption(f"Photo recorded: {display_datetime(row.get('photo_taken_at'))}")
+            if st.button("Save task",key=f"save-{task['task_key']}",type="primary",use_container_width=True):
+                try:
+                    save_task(supabase,task,completed,st.session_state.operator_name,comment,uploaded,row)
+                    st.success("Saved for the entire management team.");st.rerun()
+                except Exception as exc:st.error(str(exc))
 
 st.divider()
+missing=[t["task"] for t in FLAT_TASKS if t["photo_required"] and (not rows_by_key.get(t["task_key"],{}).get("completed") or not rows_by_key.get(t["task_key"],{}).get("photo_url"))]
+if missing:st.warning(f"{len(missing)} required-photo tasks remain incomplete.")
+pdf=generate_pdf(rows_by_key,run)
+st.download_button("Download Shared Daily PDF",data=pdf,file_name=f"Store4691_Shared_Report_{work_date()}.pdf",mime="application/pdf",disabled=bool(missing),use_container_width=True)
 
-missing_required = [
-    FLAT_TASKS[i]["task"]
-    for i, data in st.session_state.task_data.items()
-    if FLAT_TASKS[i]["photo"]
-    and (not data["done"] or not data["photo_bytes"])
-]
+with st.expander("Manager controls"):
+    st.warning("Reset Today deletes today's shared checklist for every user.")
+    confirm=st.checkbox("I understand this affects everyone.")
+    if st.button("Reset Today's Shared Checklist",disabled=not confirm,use_container_width=True):
+        reset_today(supabase);st.success("Today's shared checklist was reset.");st.rerun()
 
-if missing_required:
-    st.error("Missing required evidence for: " + "; ".join(missing_required))
-
-audit_missing = [
-    FLAT_TASKS[i]["task"]
-    for i in audit_indexes
-    if not st.session_state.task_data[i]["done"]
-    or not st.session_state.task_data[i]["photo_bytes"]
-]
-
-if audit_missing:
-    st.warning(
-        "End-of-day audit incomplete. The following areas still require completion and a photo: "
-        + "; ".join(audit_missing)
-    )
-
-pdf_bytes = generate_pdf(st.session_state.manager_name)
-
-st.download_button(
-    "Download Daily PDF",
-    data=pdf_bytes,
-    file_name=f"Store4691_Daily_Report_{today.strftime('%Y-%m-%d')}.pdf",
-    mime="application/pdf",
-    disabled=bool(missing_required or audit_missing),
-    use_container_width=True,
-)
-
-if st.button("Reset Today", use_container_width=True):
-    for i in range(len(FLAT_TASKS)):
-        st.session_state.task_data[i] = {
-            "done": False,
-            "comment": "",
-            "photo_bytes": None,
-            "completed_at": None,
-            "photo_taken_at": None,
-        }
-    st.session_state.day_started_at = format_local()
-    st.session_state.selected_section = None
-    st.rerun()
-
-st.caption(
-    "Version 2.0 · Selected mandatory photos, Central Time timestamps and 4-page PDF. "
-    "Permanent cloud history will be added next."
-)
+st.caption("Multiuser Version 3.0 · Supabase shared database · Changes appear on all devices after refresh or within about 10 seconds.")
