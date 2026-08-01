@@ -13,7 +13,6 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, PageBreak
-from streamlit_autorefresh import st_autorefresh
 from supabase import Client, create_client
 
 st.set_page_config(page_title="O'Reilly Operations Assistant", page_icon="✅", layout="centered", initial_sidebar_state="collapsed")
@@ -315,7 +314,6 @@ def generate_pdf(rows_by_key,run):
 
 if "operator_name" not in st.session_state:st.session_state.operator_name=""
 if "selected_section" not in st.session_state:st.session_state.selected_section=None
-if "auto_refresh" not in st.session_state:st.session_state.auto_refresh=True
 
 try:
     supabase=get_supabase();initialize_today(supabase)
@@ -324,9 +322,8 @@ except Exception as exc:
 
 with st.sidebar:
     st.header("Shared App")
-    st.session_state.auto_refresh=st.toggle("Auto-refresh every 10 seconds",value=st.session_state.auto_refresh)
-    if st.button("Refresh now",use_container_width=True):st.rerun()
-if st.session_state.auto_refresh:st_autorefresh(interval=10000,key="shared_db_refresh")
+    st.caption("Changes are saved immediately in Supabase. Tap Refresh to load changes made on another device.")
+    if st.button("Refresh shared checklist",use_container_width=True):st.rerun()
 
 rows=load_rows(supabase);rows_by_key={r["task_key"]:r for r in rows};run=load_run(supabase)
 today=now_local()
@@ -395,4 +392,4 @@ with st.expander("Manager controls"):
     if st.button("Reset Today's Shared Checklist",disabled=not confirm,use_container_width=True):
         reset_today(supabase);st.success("Today's shared checklist was reset.");st.rerun()
 
-st.caption("Multiuser Version 3.0 · Supabase shared database · Changes appear on all devices after refresh or within about 10 seconds.")
+st.caption("Multiuser Version 3.1 · Supabase shared database · Changes are saved for all users immediately and appear on other devices after refresh.")
