@@ -1,4 +1,48 @@
-#.7rem; line-height: 1.15; }
+import io
+from datetime import datetime
+from typing import Dict, List
+
+import streamlit as st
+from PIL import Image
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+    Image as RLImage,
+    PageBreak,
+)
+
+st.set_page_config(
+    page_title="O'Reilly Operations Assistant",
+    page_icon="✅",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown(
+    """
+    <style>
+    .stApp { background: #f5f7f6; }
+    .block-container {
+        max-width: 760px;
+        padding-top: .8rem;
+        padding-bottom: 3rem;
+    }
+    .hero {
+        background: linear-gradient(135deg, #0b5d36, #16864f);
+        color: white;
+        border-radius: 22px;
+        padding: 22px;
+        margin-bottom: 14px;
+        box-shadow: 0 10px 26px rgba(0,0,0,.13);
+    }
+    .hero h1 { margin: 0; font-size: 1.7rem; line-height: 1.15; }
     .hero p { margin: 8px 0 0 0; opacity: .93; }
     .module-card {
         background: white;
@@ -433,3 +477,4 @@ if st.button("Reset Today", use_container_width=True):
 st.caption(
     "Version 0.2 · Grouped routine cards, photo evidence and 4-page PDF. "
     "Permanent cloud history will be added next."
+)
