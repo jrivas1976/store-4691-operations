@@ -1,5 +1,5 @@
 streamlit>=1.40
-supabase>=2.15
-Pillow>=10.0
-reportlab>=4.0
-requests>=2.31
+supabase>=2.15.3
+Pillow>=10.4.0
+reportlab>=4.2.2
+requests>=2.32.3
